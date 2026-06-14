@@ -1,0 +1,63 @@
+services:
+  # Node.js API Gateway
+  - type: web
+    name: nayepankh-gateway
+    runtime: node
+    rootDir: backend/node-gateway
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JAVA_SERVICE_URL
+        fromService:
+          name: nayepankh-java
+          type: web
+          property: hostport
+          envVarKey: RENDER_INTERNAL_HOSTNAME
+      - key: PYTHON_SERVICE_URL
+        fromService:
+          name: nayepankh-chatbot
+          type: web
+          property: hostport
+          envVarKey: RENDER_INTERNAL_HOSTNAME
+      - key: FRONTEND_URL
+        fromService:
+          name: nayepankh-frontend
+          type: web
+          property: url
+
+  # Python Chatbot Service
+  - type: web
+    name: nayepankh-chatbot
+    runtime: python
+    rootDir: backend/python-chatbot
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_PATH
+        value: ./chatbot_faqs.db
+
+  # React Frontend (Static Site)
+  - type: web
+    name: nayepankh-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=0, must-revalidate
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: nayepankh-gateway
+          type: web
+          property: url
