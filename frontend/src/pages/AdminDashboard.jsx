@@ -812,14 +812,20 @@ const AdminDashboard = () => {
                 <span className="material-symbols-outlined text-on-surface-variant">map</span>
               </div>
               <div className="flex-1 min-h-[300px] bg-slate-50 rounded-lg border border-outline-variant/20 relative overflow-hidden flex items-center justify-center">
-                {/* Official India Map - Survey of India compliant */}
+                {/* Official India Map - SVG inline for reliability */}
                 <img 
                   alt="India Map - NayePankh Foundation Geographical Impact" 
                   className="h-full object-contain opacity-70 p-4" 
-                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/India_states_and_union_territories_map_no_text.svg/800px-India_states_and_union_territories_map_no_text.svg.png"
+                  src="/assets/images/india-map.svg"
+                  onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
                 />
+                <div className="hidden absolute inset-0 items-center justify-center flex-col gap-2 text-on-surface-variant">
+                  <span className="material-symbols-outlined text-[48px] opacity-30">map</span>
+                  <p className="text-sm font-semibold">India Map</p>
+                  <p className="text-xs">Uttar Pradesh Region</p>
+                </div>
                 
-                {/* Simulated markers - positioned for UP region (right-center of India) */}
+                {/* Simulated markers - positioned for UP region */}
                 <div className="absolute top-[32%] right-[28%] flex flex-col items-center group/marker cursor-pointer">
                   <div className="w-4 h-4 bg-primary rounded-full shadow-[0_0_0_4px_rgba(34,197,94,0.3)] animate-pulse"></div>
                   <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-primary opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap z-10">
