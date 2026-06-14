@@ -812,31 +812,31 @@ const AdminDashboard = () => {
                 <span className="material-symbols-outlined text-on-surface-variant">map</span>
               </div>
               <div className="flex-1 min-h-[300px] bg-slate-50 rounded-lg border border-outline-variant/20 relative overflow-hidden flex items-center justify-center">
-                {/* UP region map image from Stitch */}
+                {/* Official India Map - Survey of India compliant */}
                 <img 
-                  alt="Geographical Impact Map of UP" 
-                  className="w-full h-full object-cover opacity-60 mix-blend-multiply" 
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuCVklJ3Kzc4dZcfiRPxWeqZbkKLGBk232HxRR1FpXihzxRGZbmkvgXWfrTpNEYl6uK1WSELLGDJBxNOcjQnIpb8OMwUWaTUbLdr7uyURYdAm2Ea33EWqdqGPByosP-ZcfXODZvpCf2jlSF7adc5S1k0qM7dhVVWXl1iqO-zTjvfBZ34QlFDy-SBXFyqFKEYjbsKJCESgGucX8fwv9Xk-v_jzXmpSVVwkp9I9nu1n4W5cE9Z-j8oIx6T6IXdDEif9egOO4x3-CRSFBA"
+                  alt="India Map - NayePankh Foundation Geographical Impact" 
+                  className="h-full object-contain opacity-70 p-4" 
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/India_states_and_union_territories_map_no_text.svg/800px-India_states_and_union_territories_map_no_text.svg.png"
                 />
                 
-                {/* Simulated markers */}
-                <div className="absolute top-1/4 left-1/3 flex flex-col items-center group/marker cursor-pointer">
+                {/* Simulated markers - positioned for UP region (right-center of India) */}
+                <div className="absolute top-[32%] right-[28%] flex flex-col items-center group/marker cursor-pointer">
                   <div className="w-4 h-4 bg-primary rounded-full shadow-[0_0_0_4px_rgba(34,197,94,0.3)] animate-pulse"></div>
-                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-primary opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap">
+                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-primary opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap z-10">
                     Kanpur: 12k Touched
                   </div>
                 </div>
 
-                <div className="absolute top-1/3 right-1/4 flex flex-col items-center group/marker cursor-pointer">
+                <div className="absolute top-[26%] right-[25%] flex flex-col items-center group/marker cursor-pointer">
                   <div className="w-3 h-3 bg-yellow-600 rounded-full shadow-[0_0_0_3px_rgba(218,163,0,0.3)]"></div>
-                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-yellow-700 opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap">
+                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-yellow-700 opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap z-10">
                     Noida: 8k Touched
                   </div>
                 </div>
 
-                <div className="absolute top-1/2 right-1/3 flex flex-col items-center group/marker cursor-pointer">
+                <div className="absolute top-[28%] right-[22%] flex flex-col items-center group/marker cursor-pointer">
                   <div className="w-5 h-5 bg-blue-600 rounded-full shadow-[0_0_0_5px_rgba(112,140,253,0.3)]"></div>
-                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-blue-700 opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap">
+                  <div className="mt-2 bg-white px-2 py-1 rounded shadow-md text-[10px] font-bold text-blue-700 opacity-0 group-hover/marker:opacity-100 transition-opacity whitespace-nowrap z-10">
                     Ghaziabad: 15k Touched
                   </div>
                 </div>
