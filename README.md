@@ -2,110 +2,69 @@
 
 > A production-grade, full-stack volunteer management platform built for **NayePankh Foundation** — India's biggest student-led NGO (200,000+ lives touched, 15+ branches, UP Government Registered, 80G & 12A Certified).
 
-![Status](https://img.shields.io/badge/Status-Production--Ready-brightgreen) ![Architecture](https://img.shields.io/badge/Architecture-Microservices-blue) ![Services](https://img.shields.io/badge/Services-4-orange)
+![Status](https://img.shields.io/badge/Status-Production--Ready-brightgreen) ![Architecture](https://img.shields.io/badge/Stack-Node.js_+_React-blue) ![Deploy](https://img.shields.io/badge/Deploy-Render_Free-orange)
 
 ---
 
 ## 🎯 What This System Does
 
-This is a **complete volunteer operations platform** — not just a registration form. It manages the entire volunteer lifecycle from signup to event participation to impact tracking.
-
 | Module | What It Covers |
 |--------|---------------|
 | 🧑‍🤝‍🧑 **Volunteer Management** | Registration, approval workflow, profile management, status tracking |
 | 📅 **Event & Drive Management** | Create drives, volunteer sign-up/RSVP, attendance, hours logging |
-| 🏫 **Branch Operations** | Multi-city branch management with coordinators and volunteer counts |
+| 🏫 **Branch Operations** | Multi-city branch management with volunteer counts |
 | 👨‍🎓 **Student Beneficiary Tracking** | Record students being served, teaching sessions, progress |
 | 💰 **Donation Management** | Record donations, campaign tracking, receipt generation, analytics |
 | 📊 **Analytics & Reports** | Signups over time, by city, skill, age + CSV/print export |
-| 🤖 **AI Chatbot** | FAQ matching + LLM fallback (OpenAI/Anthropic) + chat logging |
+| 🤖 **AI Chatbot** | FAQ keyword matching + fallback + chat logging |
 | 🔐 **Security** | JWT auth, bcrypt, rate limiting, Helmet headers, audit logs |
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Architecture (Unified)
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (React 19 + Vite)                     │
-│  Landing • Login • Signup • Dashboard • Events • Admin Panel          │
-│                         Port 5173                                      │
-└───────────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                   FRONTEND (React 19 + Vite)                      │
+│  Landing • Login • Signup • Dashboard • Events • Admin Panel      │
+└───────────────────────────────┬──────────────────────────────────┘
                                 │ REST API (JSON)
                                 ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                    API GATEWAY (Node.js + Express)                     │
-│  Authentication • Authorization • Validation • Rate Limiting          │
-│  Helmet Security Headers • Request Routing • Audit Logging            │
-│                         Port 5000                                      │
-└────────────┬─────────────────────────────────────────┬───────────────┘
-             │                                         │
-             ▼                                         ▼
-┌────────────────────────────┐          ┌──────────────────────────────┐
-│  CORE SERVICE (Spring Boot) │          │  CHATBOT SERVICE (FastAPI)    │
-│  Volunteer CRUD             │          │  FAQ Matching (DICE coeff.)   │
-│  Event Management           │          │  LLM Fallback (GPT/Claude)   │
-│  Branch Management          │          │  Chat Logging                 │
-│  Student Tracking           │          │       Port 8000               │
-│  Donation Tracking          │          └──────────────────────────────┘
-│  Analytics Engine           │
-│  Audit Log                  │
-│       Port 8080             │
-└────────────┬────────────────┘
-             │
-             ▼
-┌────────────────────────────┐
-│     SQLite Database         │
-│  volunteers • events        │
-│  branches • students        │
-│  donations • audit_logs     │
-│  teaching_sessions          │
-│  event_registrations        │
-└────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│              UNIFIED BACKEND (Node.js + Express + SQLite)          │
+│                                                                    │
+│  Auth (JWT + bcrypt)    │  Volunteer CRUD      │  Chatbot (FAQ)   │
+│  Rate Limiting          │  Event Management    │  Audit Log       │
+│  Input Validation       │  Branch Management   │  Donations       │
+│  Helmet Security        │  Student Tracking    │  Analytics       │
+│                                                                    │
+│                    SQLite (better-sqlite3)                         │
+│  volunteers • events • branches • students • donations • faqs     │
+│  event_registrations • teaching_sessions • audit_logs • chat_logs │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Frontend | React, Vite, Recharts, Lucide Icons | React 19, Vite 8 |
-| API Gateway | Node.js, Express, JWT, Helmet, express-rate-limit | Node 18+, Express 4 |
-| Core Service | Java, Spring Boot, JPA/Hibernate, SQLite | Java 21, Spring Boot 3.3 |
-| Chatbot | Python, FastAPI, SQLite | Python 3.9+ |
-| Database | SQLite (file-based, auto-created) | — |
+**Only 2 services to deploy:**
+- `backend/node-gateway` → Node.js API (everything in one server)
+- `frontend` → React static site
 
 ---
 
-## 🚀 Quick Start (4 terminals)
+## 🚀 Quick Start (Local Development)
 
 ### Prerequisites
-- Node.js ≥ 18 • Java 21+ (JDK) • Python 3.9+ • Maven 3.x
+- Node.js ≥ 18
 
-### Terminal 1 — Java Core Service
-```bash
-cd backend/java-core
-mvn spring-boot:run
-# → Running on port 8080. Auto-seeds 1 admin + 12 volunteers.
-```
-
-### Terminal 2 — Python Chatbot
-```bash
-cd backend/python-chatbot
-pip install -r requirements.txt
-python main.py
-# → Running on port 8000. Auto-seeds 6 FAQs.
-```
-
-### Terminal 3 — Node.js Gateway
+### Terminal 1 — Backend
 ```bash
 cd backend/node-gateway
-cp .env.example .env   # Edit: set JWT_SECRET to any 32+ char string
 npm install
 npm run dev
-# → Running on port 5000.
+# → API running on http://localhost:5000
+# → Auto-seeds demo data on first run
 ```
 
-### Terminal 4 — React Frontend
+### Terminal 2 — Frontend
 ```bash
 cd frontend
 npm install
@@ -113,288 +72,255 @@ npm run dev
 # → Open http://localhost:5173
 ```
 
+That's it. Two commands. No Java, no Python, no external database needed.
+
+---
+
+## 🌐 Deploy on Render (Free Tier)
+
+### Option A: Blueprint (One-Click)
+1. Go to **https://dashboard.render.com** → **New** → **Blueprint**
+2. Connect repo: **Mat-rixMJ/NGO-VRS**
+3. Render auto-detects `render.yaml` → Click **Apply**
+4. After deploy, set `VITE_API_BASE_URL` on frontend to your API URL + `/api`
+
+### Option B: Manual (2 Services)
+
+**Backend (Web Service):**
+| Setting | Value |
+|---------|-------|
+| Root Directory | `backend/node-gateway` |
+| Build Command | `npm install` |
+| Start Command | `node src/server.js` |
+| Plan | Free |
+| Env: `JWT_SECRET` | Any 32+ char random string |
+| Env: `NODE_ENV` | `production` |
+
+**Frontend (Static Site):**
+| Setting | Value |
+|---------|-------|
+| Root Directory | `frontend` |
+| Build Command | `npm install && npm run build` |
+| Publish Directory | `dist` |
+| Rewrite Rule | `/* → /index.html` |
+| Env: `VITE_API_BASE_URL` | `https://<your-backend>.onrender.com/api` |
+
 ---
 
 ## 🔑 Demo Credentials
 
-| Role | Email | Password | What You Can Do |
-|------|-------|----------|-----------------|
-| **Admin** | admin@nayepankh.org | password123 | Full dashboard, manage volunteers/events/students/donations |
-| **Volunteer** | asha@example.com | password123 | View profile, browse events, register for drives |
+| Role | Email | Password | Access |
+|------|-------|----------|--------|
+| **Admin** | admin@nayepankh.org | password123 | Full dashboard, all management |
+| **Volunteer** | aarav@example.com | password123 | Profile, events, chatbot |
 
-> 12 volunteers are pre-seeded across Mumbai, Pune, Bangalore, Delhi, and Noida.
+> 10 volunteers pre-seeded across Kanpur, Ghaziabad, Noida (last 2 months)
 
 ---
 
 ## 📱 Pages & User Flows
 
-### Public (No Login)
-- **Landing Page** — Hero section, impact stats, gallery, footer with contact
-- **AI Chatbot** — Floating widget accessible from every page
+### Public
+- **Landing Page** — Hero, impact stats, gallery, contact
+- **AI Chatbot** — Floating widget on every page
 
 ### Volunteer (After Login)
-- **Dashboard** — Profile completeness tracker, skills, volunteer details
-- **Events** — Browse drives, register/unregister, view personal stats (attended, hours)
+- **Dashboard** — Profile completeness, skills, details
+- **Events** — Browse drives, register/unregister, view stats (attended, hours)
 - **Profile Edit** — Update name, phone, city, skills, availability
 
-### Admin (After Admin Login)
-- **Overview** — KPI cards, enrollment chart, branch leaderboard, recent registrations
-- **Volunteers** — Paginated table with search/filter, status management, view/delete
-- **Analytics** — Signups over time, by city, by skill, by age band (interactive charts)
-- **Events** — Create/manage drives and events
-- **FAQs** — Add/edit/delete chatbot knowledge base
-- **Reports** — CSV export, print-ready HTML report with all data
+### Admin
+- **Overview** — KPI cards, enrollment chart, branch leaderboard
+- **Volunteers** — Paginated table, search/filter, approve/reject, status management
+- **Analytics** — Signups by time/city/skill/age (interactive Recharts)
+- **Events** — Create/manage drives, mark attendance, log hours
+- **Students** — Beneficiary records, teaching sessions
+- **Donations** — Record/view donations, campaign analytics
+- **FAQs** — Manage chatbot knowledge base
+- **Reports** — CSV export, print-ready HTML
 
 ---
 
-## 🔌 Complete API Reference
+## 🔌 API Reference
 
-### Auth & Password
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/auth/signup` | Public | Register volunteer |
-| POST | `/api/auth/login` | Public | Get JWT token |
-| POST | `/api/auth/forgot-password` | Public | Request reset token |
-| POST | `/api/auth/reset-password` | Public | Reset with token |
+### Auth
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/signup` | Register |
+| POST | `/api/auth/login` | Login → JWT |
+| POST | `/api/auth/forgot-password` | Get reset token |
+| POST | `/api/auth/reset-password` | Reset with token |
 
-### Volunteer Profile
+### Volunteers
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/api/volunteers/me` | User | Own profile |
 | PUT | `/api/volunteers/me` | User | Update profile |
-
-### Admin — Volunteer Management
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
 | GET | `/api/volunteers?page=&limit=&search=&city=&skill=` | Admin | Paginated list |
-| GET | `/api/volunteers/:id` | Admin | Detail view |
-| PUT | `/api/volunteers/:id/status` | Admin | Change status (pending/approved/active/inactive) |
-| DELETE | `/api/volunteers/:id` | Admin | Delete record |
+| GET | `/api/volunteers/:id` | Admin | Detail |
+| PUT | `/api/volunteers/:id/status` | Admin | Change status |
+| DELETE | `/api/volunteers/:id` | Admin | Delete |
 
-### Events & Drives
+### Events
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/events` | User | List all events |
-| GET | `/api/events/:id` | User | Event + registrations |
-| POST | `/api/events` | Admin | Create event |
-| PUT | `/api/events/:id` | Admin | Update event |
-| DELETE | `/api/events/:id` | Admin | Delete event |
-| POST | `/api/events/:id/register` | User | Join an event |
-| DELETE | `/api/events/:id/register` | User | Leave an event |
-| PUT | `/api/events/:id/attendance` | Admin | Mark attendance + hours |
-| GET | `/api/my-events` | User | Personal event history + stats |
+| GET | `/api/events` | User | List events |
+| GET | `/api/events/:id` | User | Detail + registrations |
+| POST | `/api/events` | Admin | Create |
+| PUT | `/api/events/:id` | Admin | Update |
+| DELETE | `/api/events/:id` | Admin | Delete |
+| POST | `/api/events/:id/register` | User | Join event |
+| DELETE | `/api/events/:id/register` | User | Leave event |
+| PUT | `/api/events/:id/attendance` | Admin | Mark attendance |
+| GET | `/api/my-events` | User | My events + hours |
 
 ### Branches
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/branches` | User | All branches + volunteer counts |
-| GET | `/api/branches/:id` | User | Branch detail |
-| POST | `/api/branches` | Admin | Create branch |
-| PUT | `/api/branches/:id` | Admin | Update branch |
-| DELETE | `/api/branches/:id` | Admin | Delete branch |
+| GET | `/api/branches` | User | List + volunteer counts |
+| POST | `/api/branches` | Admin | Create |
+| PUT | `/api/branches/:id` | Admin | Update |
+| DELETE | `/api/branches/:id` | Admin | Delete |
 
-### Students (Beneficiaries)
+### Students
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/students?city=&branchId=&volunteerId=&status=` | Admin | List with filters |
-| GET | `/api/students/summary` | Admin | Total students, sessions, teaching hours |
-| GET | `/api/students/:id` | User | Student + teaching history |
-| POST | `/api/students` | Admin | Register student |
-| PUT | `/api/students/:id` | Admin | Update student |
-| DELETE | `/api/students/:id` | Admin | Remove student |
-| POST | `/api/students/sessions` | User | Log a teaching session |
-| GET | `/api/my-sessions` | User | Volunteer's teaching history |
+| GET | `/api/students` | Admin | List (filter by city/branch/volunteer) |
+| GET | `/api/students/summary` | Admin | Stats |
+| GET | `/api/students/:id` | User | Detail + sessions |
+| POST | `/api/students` | Admin | Create |
+| PUT | `/api/students/:id` | Admin | Update |
+| DELETE | `/api/students/:id` | Admin | Delete |
+| POST | `/api/students/sessions` | User | Log teaching session |
+| GET | `/api/my-sessions` | User | My teaching history |
 
 ### Donations
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/donations` | Admin | All donations |
-| GET | `/api/donations/summary` | Admin | Total, this month, by campaign |
-| GET | `/api/donations/:id` | Admin | Donation detail |
-| POST | `/api/donations` | Admin | Record donation |
-| PUT | `/api/donations/:id` | Admin | Update donation |
-| DELETE | `/api/donations/:id` | Admin | Delete donation |
+| GET | `/api/donations` | Admin | List all |
+| GET | `/api/donations/summary` | Admin | Totals + by campaign |
+| POST | `/api/donations` | Admin | Record |
+| PUT | `/api/donations/:id` | Admin | Update |
+| DELETE | `/api/donations/:id` | Admin | Delete |
 
-### Analytics & Chatbot
+### Chatbot & FAQs
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/analytics/summary` | Admin | Volunteer totals |
-| GET | `/api/analytics/trends` | Admin | Charts data |
+| POST | `/api/chatbot/ask` | Public | Ask question |
 | GET | `/api/faqs` | Public | List FAQs |
-| POST | `/api/faqs` | Admin | Create FAQ |
-| PUT | `/api/faqs/:id` | Admin | Edit FAQ |
-| DELETE | `/api/faqs/:id` | Admin | Delete FAQ |
-| POST | `/api/chatbot/ask` | Public | Ask chatbot |
+| POST | `/api/faqs` | Admin | Create |
+| PUT | `/api/faqs/:id` | Admin | Edit |
+| DELETE | `/api/faqs/:id` | Admin | Delete |
 
 ### System
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/health` | Public | Gateway health |
-| GET | `/api/audit` | Admin | Recent admin actions |
-| POST | `/api/audit` | Admin | Log action |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/api/audit` | Admin action logs |
+| POST | `/api/audit` | Log admin action |
 
 ---
 
-## 🗄️ Database Schema
+## 🗄️ Database (SQLite — Auto-Created)
 
 ```
-volunteers         — id, name, email, passwordHash, phone, age, city, skills,
-                     availability, role, status, approvedAt, approvedBy, createdAt
+volunteers          — id, name, email, password_hash, phone, age, city, skills,
+                      availability, role, status, approved_at, approved_by, created_at
 
-events             — id, title, description, type, eventDate, location, city,
-                     maxCapacity, status, createdBy, createdAt
+events              — id, title, description, type, event_date, location, city,
+                      max_capacity, status, created_by, created_at
 
-event_registrations — id, eventId, volunteerId, status, registeredAt, hoursLogged
+event_registrations — id, event_id, volunteer_id, status, hours_logged, registered_at
 
-branches           — id, name, city, state, headVolunteerId, contactEmail,
-                     contactPhone, status, foundedAt, createdAt
+branches            — id, name, city, state, head_volunteer_id, contact_email,
+                      contact_phone, status, founded_at, created_at
 
-students           — id, name, age, school, grade, guardianName, guardianPhone,
-                     city, branchId, assignedVolunteerId, status, notes, createdAt
+students            — id, name, age, school, grade, guardian_name, guardian_phone,
+                      city, branch_id, assigned_volunteer_id, status, notes, created_at
 
-teaching_sessions  — id, volunteerId, studentId, subject, sessionDate,
-                     durationMinutes, notes, createdAt
+teaching_sessions   — id, volunteer_id, student_id, subject, session_date,
+                      duration_minutes, notes, created_at
 
-donations          — id, donorName, donorEmail, donorPhone, amount, currency,
-                     campaign, paymentMethod, receiptNumber, panNumber,
-                     status, notes, donationDate, createdAt
+donations           — id, donor_name, donor_email, donor_phone, amount, currency,
+                      campaign, payment_method, receipt_number, pan_number,
+                      status, notes, donation_date, created_at
 
-audit_logs         — id, adminId, action, targetEntity, targetId, details, createdAt
+audit_logs          — id, admin_id, action, target_entity, target_id, details, created_at
 
-faqs               — id, question, answer, category
-chat_logs          — id, volunteerId, question, matchedFaqId, responseSource, createdAt
+faqs                — id, question, answer, category
+chat_logs           — id, volunteer_id, question, matched_faq_id, response_source, created_at
 ```
 
 ---
 
-## 🔒 Security Implementation
+## 🔒 Security
 
-| Layer | Protection |
-|-------|-----------|
-| Passwords | bcrypt hash (10 salt rounds) |
-| Sessions | JWT with 24h expiry |
+| Layer | Implementation |
+|-------|---------------|
+| Passwords | bcrypt (10 salt rounds) |
+| Sessions | JWT, 24h expiry |
 | Validation | express-validator on all inputs |
 | Rate Limiting | Auth: 20/15min, Chatbot: 30/min, General: 100/min |
 | Headers | Helmet (XSS, HSTS, noSniff, frameguard) |
-| Payload | 10KB body size limit |
+| Payload | 10KB body limit |
 | CORS | Origin-restricted in production |
-| Secrets | Never exposed in API responses |
-| Access Control | Role-based middleware (volunteer/admin) |
-| Accountability | Audit log for all admin actions |
-| Password Reset | 1-hour expiry tokens |
-
----
-
-## 🤖 AI Chatbot — How It Works
-
-```
-User Question
-     │
-     ▼
-┌─────────────────────┐
-│ Normalize + Tokenize │
-└──────────┬──────────┘
-           ▼
-┌─────────────────────┐     Score ≥ 0.4?     ┌─────────────┐
-│ DICE Coefficient vs  │ ──── YES ──────────▶ │ Return FAQ  │
-│ all stored FAQs      │                      │ answer      │
-└──────────┬──────────┘                      └─────────────┘
-           │ NO
-           ▼
-┌─────────────────────┐     API Key exists?   ┌─────────────┐
-│ LLM Fallback        │ ──── YES ──────────▶ │ GPT/Claude  │
-│ (FAQ as context)    │                      │ response    │
-└──────────┬──────────┘                      └─────────────┘
-           │ NO
-           ▼
-┌─────────────────────┐
-│ Keyword Fallback +   │
-│ Contact Info         │
-└─────────────────────┘
-```
-
-All interactions are logged to `chat_logs` for analytics.
+| Secrets | Never in responses |
+| Access | Role-based middleware |
+| Audit | All admin actions logged |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-nayrpankh/
-├── frontend/                          # React 19 + Vite
-│   └── src/
-│       ├── api/axiosClient.js         # JWT-intercepted HTTP client
-│       ├── components/                # Navbar, ChatbotWidget, ProtectedRoute
-│       ├── context/                   # AuthContext (global auth state)
-│       └── pages/                     # Landing, Login, Signup, Dashboard, Events, Admin
-│
+NGO-VRS/
 ├── backend/
-│   ├── node-gateway/                  # Express API Gateway
-│   │   └── src/server.js             # All routes, auth, validation, rate limiting
-│   │
-│   ├── java-core/                     # Spring Boot 3.3 Core Service
-│   │   └── src/main/java/.../
-│   │       ├── controller/            # Volunteer, Event, Branch, Student, Donation, Audit
-│   │       ├── model/                 # JPA entities (7 tables)
-│   │       ├── repository/            # Spring Data JPA interfaces
-│   │       └── config/                # Database seeder
-│   │
-│   └── python-chatbot/                # FastAPI Chatbot Service
-│       └── main.py                    # FAQ matching, LLM fallback, chat logging
+│   └── node-gateway/              # Unified API server
+│       ├── src/
+│       │   ├── server.js          # All routes + logic (single file)
+│       │   ├── db.js              # SQLite schema + connection
+│       │   └── seed.js            # Demo data seeder
+│       ├── package.json
+│       └── .env.example
 │
-├── volunteer_system.db                # SQLite DB (auto-created by Java)
-├── chatbot_faqs.db                    # Chatbot DB (auto-created by Python)
+├── frontend/                      # React 19 + Vite
+│   ├── src/
+│   │   ├── api/axiosClient.js     # JWT-intercepted HTTP client
+│   │   ├── components/            # Navbar, ChatbotWidget, ProtectedRoute
+│   │   ├── context/               # AuthContext
+│   │   └── pages/                 # Landing, Login, Signup, Dashboard, Events, Admin
+│   ├── package.json
+│   └── vite.config.js
+│
+├── render.yaml                    # Render Blueprint (one-click deploy)
+├── README.md
+├── TEST_REPORT.md                 # 35/35 tests passed
 ├── PRD_Volunteer_Registration_System.md
-├── TRD_Volunteer_Registration_System.md
-└── README.md
+└── TRD_Volunteer_Registration_System.md
 ```
 
 ---
 
-## 🌐 Deployment Guide
+## 📊 Seeded Demo Data
 
-| Service | Platform | Notes |
-|---------|----------|-------|
-| Frontend | Vercel / Netlify | Set `VITE_API_BASE_URL` |
-| Gateway | Render / Railway | Set all env vars below |
-| Java | Render (Docker) | Needs persistent volume for SQLite |
-| Python | Render / Railway | Lightweight, auto-scales |
-
-**Environment Variables:**
-```env
-JWT_SECRET=your_strong_random_string_min_32_chars
-FRONTEND_URL=https://your-frontend.vercel.app
-JAVA_SERVICE_URL=http://java-service:8080/internal
-PYTHON_SERVICE_URL=http://python-service:8000
-OPENAI_API_KEY=sk-...        # Optional: for AI chatbot
-ANTHROPIC_API_KEY=sk-ant-... # Optional: alternative AI
-```
-
----
-
-## 📊 Key Metrics This System Tracks
-
-| Metric | Source |
-|--------|--------|
-| Total registered volunteers | `/api/analytics/summary` |
-| New this week / month | `/api/analytics/summary` |
-| Volunteers by city, skill, age | `/api/analytics/trends` |
-| Events conducted | `/api/events` |
-| Volunteer hours logged | `/api/my-events` |
-| Students being taught | `/api/students/summary` |
-| Teaching hours delivered | `/api/my-sessions` |
-| Total donations received | `/api/donations/summary` |
-| Donations by campaign | `/api/donations/summary` |
-| Branch performance | `/api/branches` |
+| Entity | Count | Details |
+|--------|-------|---------|
+| Admin | 1 | Prashant Shukla |
+| Volunteers | 10 | Last 2 months, across Kanpur/Ghaziabad/Noida |
+| Branches | 3 | Kanpur HQ, Ghaziabad, Noida |
+| Events | 5 | 3 upcoming, 2 completed (with attendance) |
+| Students | 5 | Class 4-8, multiple schools |
+| Donations | 5 | ₹1,55,000 total |
+| FAQs | 6 | Registration, eligibility, contact, etc. |
 
 ---
 
 ## 🙏 About NayePankh Foundation
 
-[NayePankh Foundation](https://nayepankh.com) is a UP Government registered NGO (80G & 12A certified) working towards uplifting underprivileged communities. Operating across 15+ cities in India, it is one of the largest student-led organizations providing education, food, healthcare, and sanitary supplies to those in need.
+[NayePankh Foundation](https://nayepankh.com) is a UP Government registered NGO (80G & 12A) working towards uplifting underprivileged communities across 15+ cities in India.
 
 - 🌍 200,000+ lives touched
-- 🎓 Student-led operations
+- 🎓 India's biggest student-led NGO
 - 📰 Featured in The Pioneer, Dainik Jagran, Hindustan
 - 📞 contact@nayepankh.com | +91 8318500748
 
