@@ -1,4 +1,15 @@
 services:
+  # Python Chatbot Service
+  - type: web
+    name: nayepankh-chatbot
+    runtime: python
+    rootDir: backend/python-chatbot
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_PATH
+        value: ./chatbot_faqs.db
+
   # Node.js API Gateway
   - type: web
     name: nayepankh-gateway
@@ -12,33 +23,14 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: JAVA_SERVICE_URL
-        fromService:
-          name: nayepankh-java
-          type: web
-          property: hostport
-          envVarKey: RENDER_INTERNAL_HOSTNAME
+        value: http://localhost:8080/internal
       - key: PYTHON_SERVICE_URL
         fromService:
           name: nayepankh-chatbot
           type: web
-          property: hostport
-          envVarKey: RENDER_INTERNAL_HOSTNAME
+          property: host
       - key: FRONTEND_URL
-        fromService:
-          name: nayepankh-frontend
-          type: web
-          property: url
-
-  # Python Chatbot Service
-  - type: web
-    name: nayepankh-chatbot
-    runtime: python
-    rootDir: backend/python-chatbot
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: DB_PATH
-        value: ./chatbot_faqs.db
+        value: "*"
 
   # React Frontend (Static Site)
   - type: web
@@ -60,4 +52,4 @@ services:
         fromService:
           name: nayepankh-gateway
           type: web
-          property: url
+          property: host
