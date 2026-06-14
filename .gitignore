@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+target/
+
+# Build outputs
+dist/
+build/
+
+# Environment secrets - NEVER COMMIT THESE
+.env
+*.env.local
+*.env.production
+
+# Databases (commit only the seed, not live data)
+*.db
+*.db-shm
+*.db-wal
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Package locks (optional - can include if needed)
+# package-lock.json
+
+# Old folders (if still exist)
+backend-node/
+backend-java/
+backend-python/
+
+# Misc
+maven.zip
+bin/

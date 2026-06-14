@@ -1,0 +1,234 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Sora:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Sora:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --bg-cosmos: #f3fcef; /* Light mint/green background */
+  --bg-surface: rgba(255, 255, 255, 0.85); /* Frosted light white */
+  --bg-surface-hover: rgba(255, 255, 255, 0.95);
+  --border-glass: rgba(109, 123, 108, 0.18); /* Outline variant */
+  --border-active: #006e2f; /* Primary forest green */
+  
+  --primary: #006e2f; /* Primary Forest Green */
+  --primary-light: #22c55e; /* Primary Container Light Green */
+  --secondary: #3755c3; /* Secondary Blue */
+  --tertiary: #795900; /* Tertiary Yellow/Gold */
+  
+  --gradient-gemini: linear-gradient(135deg, #006e2f 0%, #22c55e 50%, #3755c3 100%);
+  --gradient-primary: linear-gradient(135deg, #006e2f 0%, #22c55e 100%);
+  --gradient-cyan: linear-gradient(135deg, #3755c3 0%, #708cfd 100%);
+  
+  --text-main: #161d16; /* Dark green/charcoal */
+  --text-muted: #3d4a3d; /* Dark muted green */
+  --text-accent: #006e2f; /* Forest green */
+  
+  --shadow-glow: 0 0 20px rgba(0, 110, 47, 0.15);
+  --shadow-cyan-glow: 0 0 20px rgba(55, 85, 195, 0.12);
+  --shadow-volumetric: inset 0 0 12px rgba(255, 255, 255, 0.5), 0 8px 32px rgba(0, 0, 0, 0.05);
+  
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-full: 9999px;
+  
+  --transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: 0.15s ease;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-cosmos);
+  color: var(--text-main);
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  min-height: 100vh;
+  
+  /* Bright, fresh light background instead of dark space */
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(34, 197, 94, 0.07) 0%, transparent 45%),
+    radial-gradient(circle at 90% 80%, rgba(55, 85, 195, 0.05) 0%, transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(121, 89, 0, 0.03) 0%, transparent 50%);
+  background-size: 200% 200%;
+  animation: cosmic-drift 25s ease infinite alternate;
+}
+
+@keyframes cosmic-drift {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Sora', sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Glassrealism Panel */
+.glass-panel {
+  background: var(--bg-surface);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-volumetric);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), background var(--transition-normal);
+}
+
+.glass-panel:hover {
+  border-color: rgba(0, 110, 47, 0.15);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+/* Glowing Buttons - Google Gemini Alive Aesthetics */
+.btn-primary {
+  background: var(--gradient-primary);
+  color: #fff;
+  border: none;
+  padding: 12px 24px;
+  font-weight: 600;
+  font-family: 'DM Sans', sans-serif;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  box-shadow: 0 0 15px rgba(0, 110, 47, 0.15);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--transition-fast), box-shadow var(--transition-normal);
+}
+
+.btn-primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 200%;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: skewX(-25deg);
+  transition: 0.75s;
+  opacity: 0;
+}
+
+.btn-primary:hover::before {
+  left: 125%;
+  opacity: 1;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.3), 0 0 10px rgba(55, 85, 195, 0.15);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.4);
+  border: 1.5px solid rgba(109, 123, 108, 0.25);
+  color: var(--text-main);
+  padding: 12px 24px;
+  font-weight: 500;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--transition-normal);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 15px rgba(0, 110, 47, 0.1);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all var(--transition-normal);
+}
+
+.btn-danger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.25);
+}
+
+/* Glass Inputs */
+.glass-input {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1.5px solid var(--border-glass);
+  color: var(--text-main);
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.95rem;
+  width: 100%;
+  transition: all var(--transition-normal);
+}
+
+.glass-input:focus {
+  outline: none;
+  border-color: var(--border-active);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 15px rgba(0, 110, 47, 0.15);
+}
+
+.glass-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-cosmos);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-full);
+  border: 2px solid var(--bg-cosmos);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--secondary);
+}
+
+/* Space Ticker / Monospace chip style */
+.label-mono {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
