@@ -8,941 +8,339 @@ const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 require('dotenv').config();
 
+const db = require('./db');
+const seed = require('./seed');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET environment variable is not set!');
-  process.exit(1);
-}
-const JAVA_SERVICE_URL = process.env.JAVA_SERVICE_URL || 'http://localhost:8080/internal';
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_in_production_32chars';
 
-// Security headers
+// Security
 app.use(helmet({ contentSecurityPolicy: false }));
-
-// CORS: restrict to frontend origin in production
 const ALLOWED_ORIGIN = process.env.FRONTEND_URL || '*';
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }));
-app.use(express.json({ limit: '10kb' })); // Payload size limit
+app.use(express.json({ limit: '10kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// --- RATE LIMITERS ---
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // max 20 login/signup attempts per IP per window
-  message: { error: { code: 'TOO_MANY_REQUESTS', message: 'Too many attempts, please try again later' } },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+// Rate Limiters
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: { code: 'TOO_MANY_REQUESTS', message: 'Too many attempts' } } });
+const chatbotLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: { error: { code: 'TOO_MANY_REQUESTS', message: 'Slow down' } } });
+app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 100 }));
 
-const chatbotLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 30, // 30 chatbot requests per minute per IP
-  message: { error: { code: 'TOO_MANY_REQUESTS', message: 'Too many requests, please slow down' } }
-});
-
-const generalLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
-  max: 100, // 100 requests per minute for general endpoints
-  message: { error: { code: 'TOO_MANY_REQUESTS', message: 'Rate limit exceeded' } }
-});
-
-app.use('/api/', generalLimiter);
-
-// --- HEALTH CHECK ---
+// --- HEALTH ---
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    service: 'api-gateway',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  });
+  const count = db.prepare('SELECT COUNT(*) as c FROM volunteers').get().c;
+  res.json({ status: 'ok', uptime: process.uptime(), volunteers: count, timestamp: new Date().toISOString() });
 });
 
-// JWT Verification Middleware
+// --- AUTH MIDDLEWARE ---
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Access token required' } });
-  }
-
+  const token = req.headers['authorization']?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Access token required' } });
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid or expired token' } });
-    }
+    if (err) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid or expired token' } });
     req.user = user;
     next();
   });
 };
-
-// Admin Authorization Middleware
 const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-  }
+  if (req.user.role !== 'admin') return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
   next();
 };
 
-// --- AUTHENTICATION ROUTES ---
+// ==================== AUTH ====================
 
-// POST /api/auth/signup - Public (rate limited)
 app.post('/api/auth/signup', authLimiter, [
   body('name').trim().notEmpty().withMessage('Name is required'),
-  body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-  body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Invalid phone number'),
-  body('age').optional({ checkFalsy: true }).isInt({ min: 5, max: 120 }).withMessage('Age must be between 5 and 120'),
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
-    }
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
 
-    const { name, email, password, phone, age, city, skills, availability, role } = req.body;
+  const { name, email, password, phone, age, city, skills, availability, role } = req.body;
+  const existing = db.prepare('SELECT id FROM volunteers WHERE email = ?').get(email);
+  if (existing) return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Email already registered' } });
 
-    const passwordHash = bcrypt.hashSync(password, 10);
-    
-    // Call Java Service to create volunteer
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        email,
-        passwordHash,
-        phone,
-        age: age ? parseInt(age) : null,
-        city,
-        skills,
-        availability,
-        role: role || 'volunteer'
-      })
-    });
-
-    const data = await response.json();
-    
-    if (response.status === 409) {
-      return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Email is already registered' } });
-    }
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: { code: 'SERVER_ERROR', message: data.error || 'Failed to create account' } });
-    }
-
-    res.status(201).json({ message: 'Account created successfully', id: data.id });
-  } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+  const hash = bcrypt.hashSync(password, 10);
+  const r = role === 'admin' ? 'admin' : 'volunteer';
+  const s = r === 'admin' ? 'active' : 'pending';
+  const result = db.prepare(`INSERT INTO volunteers (name, email, password_hash, phone, age, city, skills, availability, role, status) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(name, email, hash, phone || null, age ? parseInt(age) : null, city || null, skills || null, availability || null, r, s);
+  res.status(201).json({ message: 'Account created successfully', id: result.lastInsertRowid });
 });
 
-// POST /api/auth/login - Public (rate limited)
 app.post('/api/auth/login', authLimiter, [
-  body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
   body('password').notEmpty().withMessage('Password is required'),
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
-    }
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
 
-    const { email, password } = req.body;
+  const { email, password } = req.body;
+  const user = db.prepare('SELECT * FROM volunteers WHERE email = ?').get(email);
+  if (!user) return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
+  if (!bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
 
-    // Call Java Service to get volunteer by email
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/by-email?email=${encodeURIComponent(email)}`);
-    if (response.status === 404) {
-      return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
-    }
-
-    const user = await response.json();
-    
-    // Verify password hash
-    const isPasswordValid = bcrypt.compareSync(password, user.passwordHash);
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
-    }
-
-    // Generate JWT
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name },
-      JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
-    );
-
-    res.status(200).json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      }
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+  const token = jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '24h' });
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
 });
 
-// --- VOLUNTEER PROFILE ROUTES (JWT PROTECTED) ---
-
-// POST /api/auth/forgot-password - Request password reset
-app.post('/api/auth/forgot-password', authLimiter, [
-  body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
-    }
-    const { email } = req.body;
-    
-    // Check if user exists
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/by-email?email=${encodeURIComponent(email)}`);
-    if (response.status === 404) {
-      // Don't reveal if email exists - always return success
-      return res.status(200).json({ message: 'If the email is registered, a reset link has been sent.' });
-    }
-    
-    const user = await response.json();
-    
-    // Generate a time-limited reset token (JWT with short expiry)
-    const resetToken = jwt.sign(
-      { id: user.id, email: user.email, purpose: 'password_reset' },
-      JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-    
-    // In production: send email with reset link containing the token
-    // For now: log the token (would be replaced with email service)
-    console.log(`[PASSWORD RESET] Token for ${email}: ${resetToken}`);
-    
-    res.status(200).json({ 
-      message: 'If the email is registered, a reset link has been sent.',
-      // Include token in dev mode for testing (remove in production)
-      ...(process.env.NODE_ENV !== 'production' && { resetToken })
-    });
-  } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
+app.post('/api/auth/forgot-password', authLimiter, [body('email').isEmail().normalizeEmail()], (req, res) => {
+  const { email } = req.body;
+  const user = db.prepare('SELECT id, email FROM volunteers WHERE email = ?').get(email);
+  if (user) {
+    const resetToken = jwt.sign({ id: user.id, email: user.email, purpose: 'password_reset' }, JWT_SECRET, { expiresIn: '1h' });
+    console.log(`[RESET TOKEN] ${email}: ${resetToken}`);
+    return res.json({ message: 'If registered, a reset link has been sent.', ...(process.env.NODE_ENV !== 'production' && { resetToken }) });
   }
+  res.json({ message: 'If registered, a reset link has been sent.' });
 });
 
-// POST /api/auth/reset-password - Reset password with token
-app.post('/api/auth/reset-password', [
-  body('token').notEmpty().withMessage('Reset token is required'),
-  body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-], async (req, res) => {
+app.post('/api/auth/reset-password', [body('token').notEmpty(), body('newPassword').isLength({ min: 8 })], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: errors.array()[0].msg } });
-    }
-    
-    const { token, newPassword } = req.body;
-    
-    // Verify the reset token
-    let decoded;
-    try {
-      decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.purpose !== 'password_reset') {
-        return res.status(400).json({ error: { code: 'INVALID_TOKEN', message: 'Invalid reset token' } });
-      }
-    } catch (e) {
-      return res.status(400).json({ error: { code: 'INVALID_TOKEN', message: 'Reset token is invalid or expired' } });
-    }
-    
-    // Hash new password
-    const passwordHash = bcrypt.hashSync(newPassword, 10);
-    
-    // Update via Java service
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${decoded.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passwordHash })
-    });
-    
-    if (!response.ok) {
-      return res.status(500).json({ error: { code: 'UPDATE_FAILED', message: 'Failed to update password' } });
-    }
-    
-    res.status(200).json({ message: 'Password has been reset successfully' });
-  } catch (error) {
-    console.error('Reset password error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+    const decoded = jwt.verify(req.body.token, JWT_SECRET);
+    if (decoded.purpose !== 'password_reset') throw new Error();
+    const hash = bcrypt.hashSync(req.body.newPassword, 10);
+    db.prepare('UPDATE volunteers SET password_hash = ? WHERE id = ?').run(hash, decoded.id);
+    res.json({ message: 'Password reset successfully' });
+  } catch { res.status(400).json({ error: { code: 'INVALID_TOKEN', message: 'Token invalid or expired' } }); }
 });
 
-// --- VOLUNTEER PROFILE ROUTES (JWT PROTECTED) ---
+// ==================== VOLUNTEER PROFILE ====================
 
-// GET /api/volunteers/me - Get own profile
-app.get('/api/volunteers/me', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${req.user.id}`);
-    if (!response.ok) {
-      return res.status(response.status).json({ error: { code: 'NOT_FOUND', message: 'Profile not found' } });
-    }
-    const user = await response.json();
-    delete user.passwordHash; // Don't expose hash
-    res.status(200).json(user);
-  } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/volunteers/me', authenticateToken, (req, res) => {
+  const user = db.prepare('SELECT id,name,email,phone,age,city,skills,availability,role,status,created_at FROM volunteers WHERE id=?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Profile not found' } });
+  res.json(user);
 });
 
-// PUT /api/volunteers/me - Update own profile
-app.put('/api/volunteers/me', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${req.user.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json({ error: { code: 'UPDATE_FAILED', message: data.error || 'Failed to update profile' } });
-    }
-    delete data.passwordHash;
-    res.status(200).json(data);
-  } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.put('/api/volunteers/me', authenticateToken, (req, res) => {
+  const { name, phone, age, city, skills, availability } = req.body;
+  db.prepare(`UPDATE volunteers SET name=COALESCE(?,name), phone=COALESCE(?,phone), age=COALESCE(?,age), city=COALESCE(?,city), skills=COALESCE(?,skills), availability=COALESCE(?,availability) WHERE id=?`)
+    .run(name, phone, age ? parseInt(age) : null, city, skills, availability, req.user.id);
+  const updated = db.prepare('SELECT id,name,email,phone,age,city,skills,availability,role,status,created_at FROM volunteers WHERE id=?').get(req.user.id);
+  res.json(updated);
 });
 
-// --- ADMIN VOLUNTEER CRUD ROUTES (ADMIN ONLY) ---
+// ==================== ADMIN VOLUNTEERS ====================
 
-// GET /api/volunteers - Get all volunteers (proxied with pagination)
-app.get('/api/volunteers', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const query = new URLSearchParams(req.query).toString();
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers?${query}`);
-    const data = await response.json();
-    
-    // Remove password hashes from response
-    if (Array.isArray(data)) {
-      const cleanData = data.map(v => {
-        delete v.passwordHash;
-        return v;
-      });
-      res.status(response.status).json(cleanData);
-    } else if (data.results && Array.isArray(data.results)) {
-      // Paginated response
-      data.results = data.results.map(v => {
-        delete v.passwordHash;
-        return v;
-      });
-      res.status(response.status).json(data);
-    } else {
-      res.status(response.status).json(data);
-    }
-  } catch (error) {
-    console.error('Admin get volunteers error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
+app.get('/api/volunteers', authenticateToken, requireAdmin, (req, res) => {
+  const { search, city, skill, page, limit } = req.query;
+  let query = 'SELECT id,name,email,phone,age,city,skills,availability,role,status,created_at FROM volunteers WHERE 1=1';
+  const params = [];
+  if (search) { query += ' AND (name LIKE ? OR email LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+  if (city) { query += ' AND city = ?'; params.push(city); }
+  if (skill) { query += ' AND skills LIKE ?'; params.push(`%${skill}%`); }
+  query += ' ORDER BY created_at DESC';
+
+  const all = db.prepare(query).all(...params);
+  if (page && limit) {
+    const p = Math.max(parseInt(page), 1);
+    const l = Math.max(parseInt(limit), 1);
+    const start = (p - 1) * l;
+    return res.json({ total: all.length, page: p, limit: l, results: all.slice(start, start + l) });
   }
+  res.json(all);
 });
 
-// GET /api/volunteers/:id - Get detail (proxied)
-app.get('/api/volunteers/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${req.params.id}`);
-    const data = await response.json();
-    delete data.passwordHash;
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Admin get detail error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/volunteers/:id', authenticateToken, requireAdmin, (req, res) => {
+  const v = db.prepare('SELECT id,name,email,phone,age,city,skills,availability,role,status,approved_at,approved_by,created_at FROM volunteers WHERE id=?').get(req.params.id);
+  if (!v) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Volunteer not found' } });
+  res.json(v);
 });
 
-// DELETE /api/volunteers/:id - Delete record (proxied)
-app.delete('/api/volunteers/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${req.params.id}`, {
-      method: 'DELETE'
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Admin delete error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.put('/api/volunteers/:id/status', authenticateToken, requireAdmin, (req, res) => {
+  const { status } = req.body;
+  if (!['pending', 'approved', 'active', 'inactive'].includes(status)) return res.status(400).json({ error: { code: 'INVALID', message: 'Invalid status' } });
+  const approvedAt = ['approved', 'active'].includes(status) ? new Date().toISOString() : null;
+  db.prepare('UPDATE volunteers SET status=?, approved_at=COALESCE(?,approved_at), approved_by=? WHERE id=?').run(status, approvedAt, req.user.id, req.params.id);
+  const v = db.prepare('SELECT id,name,email,status,approved_at,approved_by FROM volunteers WHERE id=?').get(req.params.id);
+  res.json(v);
 });
 
-// PUT /api/volunteers/:id/status - Update volunteer status (Admin only)
-app.put('/api/volunteers/:id/status', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/volunteers/${req.params.id}/status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...req.body, approvedBy: req.user.id })
-    });
-    const data = await response.json();
-    if (data.passwordHash) delete data.passwordHash;
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Admin status update error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.delete('/api/volunteers/:id', authenticateToken, requireAdmin, (req, res) => {
+  const r = db.prepare('DELETE FROM volunteers WHERE id=?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Volunteer not found' } });
+  res.json({ message: 'Deleted' });
 });
 
-// --- ANALYTICS ROUTES (ADMIN ONLY) ---
+// ==================== ANALYTICS ====================
 
-// --- EVENT ROUTES ---
-
-// --- BRANCH ROUTES (ADMIN ONLY) ---
-
-// GET /api/branches - Get all branches
-app.get('/api/branches', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/branches`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get branches error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/analytics/summary', authenticateToken, requireAdmin, (req, res) => {
+  const total = db.prepare('SELECT COUNT(*) as c FROM volunteers').get().c;
+  const newThisWeek = db.prepare("SELECT COUNT(*) as c FROM volunteers WHERE created_at >= datetime('now','-7 days')").get().c;
+  const newThisMonth = db.prepare("SELECT COUNT(*) as c FROM volunteers WHERE created_at >= datetime('now','-30 days')").get().c;
+  res.json({ total, newThisWeek, newThisMonth });
 });
 
-// GET /api/branches/:id - Get branch detail
-app.get('/api/branches/:id', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/branches/${req.params.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get branch error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/analytics/trends', authenticateToken, requireAdmin, (req, res) => {
+  const signupsOverTime = db.prepare("SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count FROM volunteers GROUP BY month ORDER BY month").all();
+  const byCity = db.prepare("SELECT city, COUNT(*) as count FROM volunteers WHERE city IS NOT NULL GROUP BY city ORDER BY count DESC").all();
+  const bySkill = (() => {
+    const rows = db.prepare("SELECT skills FROM volunteers WHERE skills IS NOT NULL AND skills != ''").all();
+    const map = {};
+    rows.forEach(r => r.skills.split(',').forEach(s => { const k = s.trim(); if (k) map[k] = (map[k] || 0) + 1; }));
+    return Object.entries(map).map(([skill, count]) => ({ skill, count })).sort((a, b) => b.count - a.count);
+  })();
+  const byAgeBand = (() => {
+    const rows = db.prepare("SELECT age FROM volunteers WHERE age IS NOT NULL").all();
+    const bands = { 'Under 18': 0, '18-25': 0, '26-35': 0, '36+': 0 };
+    rows.forEach(r => { if (r.age < 18) bands['Under 18']++; else if (r.age <= 25) bands['18-25']++; else if (r.age <= 35) bands['26-35']++; else bands['36+']++; });
+    return Object.entries(bands).map(([band, count]) => ({ band, count }));
+  })();
+  res.json({ signupsOverTime, byCity, bySkill, byAgeBand });
 });
 
-// POST /api/branches - Create branch (Admin)
-app.post('/api/branches', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/branches`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Create branch error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+// ==================== EVENTS ====================
+
+app.get('/api/events', authenticateToken, (req, res) => {
+  const { status } = req.query;
+  let events;
+  if (status) events = db.prepare('SELECT * FROM events WHERE status=? ORDER BY event_date DESC').all(status);
+  else events = db.prepare('SELECT * FROM events ORDER BY event_date DESC').all();
+  const enriched = events.map(e => ({ ...e, registeredCount: db.prepare('SELECT COUNT(*) as c FROM event_registrations WHERE event_id=?').get(e.id).c }));
+  res.json(enriched);
 });
 
-// PUT /api/branches/:id - Update branch (Admin)
-app.put('/api/branches/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/branches/${req.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Update branch error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/events/:id', authenticateToken, (req, res) => {
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: { message: 'Event not found' } });
+  const registrations = db.prepare('SELECT er.*, v.name as volunteer_name FROM event_registrations er JOIN volunteers v ON er.volunteer_id=v.id WHERE er.event_id=?').all(req.params.id);
+  res.json({ event, registrations, registeredCount: registrations.length });
 });
 
-// DELETE /api/branches/:id - Delete branch (Admin)
-app.delete('/api/branches/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/branches/${req.params.id}`, { method: 'DELETE' });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Delete branch error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.post('/api/events', authenticateToken, requireAdmin, (req, res) => {
+  const { title, description, type, eventDate, location, city, maxCapacity } = req.body;
+  if (!title || !type || !eventDate) return res.status(400).json({ error: { message: 'title, type, eventDate required' } });
+  const r = db.prepare('INSERT INTO events (title,description,type,event_date,location,city,max_capacity,created_by) VALUES (?,?,?,?,?,?,?,?)').run(title, description, type, eventDate, location, city, maxCapacity, req.user.id);
+  res.status(201).json(db.prepare('SELECT * FROM events WHERE id=?').get(r.lastInsertRowid));
 });
 
-// --- EVENT ROUTES ---
-
-// GET /api/events - Get all events (authenticated)
-app.get('/api/events', authenticateToken, async (req, res) => {
-  try {
-    const query = new URLSearchParams(req.query).toString();
-    const response = await fetch(`${JAVA_SERVICE_URL}/events?${query}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get events error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.put('/api/events/:id', authenticateToken, requireAdmin, (req, res) => {
+  const { title, description, type, eventDate, location, city, maxCapacity, status } = req.body;
+  db.prepare('UPDATE events SET title=COALESCE(?,title),description=COALESCE(?,description),type=COALESCE(?,type),event_date=COALESCE(?,event_date),location=COALESCE(?,location),city=COALESCE(?,city),max_capacity=COALESCE(?,max_capacity),status=COALESCE(?,status) WHERE id=?')
+    .run(title, description, type, eventDate, location, city, maxCapacity, status, req.params.id);
+  res.json(db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id));
 });
 
-// GET /api/events/:id - Get event detail
-app.get('/api/events/:id', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get event detail error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.delete('/api/events/:id', authenticateToken, requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM event_registrations WHERE event_id=?').run(req.params.id);
+  db.prepare('DELETE FROM events WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
 });
 
-// POST /api/events - Create event (Admin only)
-app.post('/api/events', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...req.body, createdBy: req.user.id })
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Create event error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.post('/api/events/:id/register', authenticateToken, (req, res) => {
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: { message: 'Event not found' } });
+  const existing = db.prepare('SELECT id FROM event_registrations WHERE event_id=? AND volunteer_id=?').get(req.params.id, req.user.id);
+  if (existing) return res.status(409).json({ error: 'Already registered' });
+  if (event.max_capacity) { const c = db.prepare('SELECT COUNT(*) as c FROM event_registrations WHERE event_id=?').get(req.params.id).c; if (c >= event.max_capacity) return res.status(409).json({ error: 'Event full' }); }
+  const r = db.prepare('INSERT INTO event_registrations (event_id, volunteer_id) VALUES (?,?)').run(req.params.id, req.user.id);
+  res.status(201).json({ id: r.lastInsertRowid, status: 'registered' });
 });
 
-// PUT /api/events/:id - Update event (Admin only)
-app.put('/api/events/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Update event error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.delete('/api/events/:id/register', authenticateToken, (req, res) => {
+  db.prepare('DELETE FROM event_registrations WHERE event_id=? AND volunteer_id=?').run(req.params.id, req.user.id);
+  res.json({ message: 'Unregistered' });
 });
 
-// DELETE /api/events/:id - Delete event (Admin only)
-app.delete('/api/events/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}`, { method: 'DELETE' });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Delete event error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.put('/api/events/:id/attendance', authenticateToken, requireAdmin, (req, res) => {
+  const { volunteerId, status, hours } = req.body;
+  db.prepare('UPDATE event_registrations SET status=?, hours_logged=COALESCE(?,hours_logged) WHERE event_id=? AND volunteer_id=?').run(status, hours, req.params.id, volunteerId);
+  res.json({ message: 'Attendance updated' });
 });
 
-// POST /api/events/:id/register - Register for event (Volunteer)
-app.post('/api/events/:id/register', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ volunteerId: req.user.id })
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Register event error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+app.get('/api/my-events', authenticateToken, (req, res) => {
+  const regs = db.prepare('SELECT er.*, e.title, e.type, e.event_date, e.location, e.city, e.status as event_status FROM event_registrations er JOIN events e ON er.event_id=e.id WHERE er.volunteer_id=? ORDER BY e.event_date DESC').all(req.user.id);
+  const totalHours = regs.reduce((sum, r) => sum + (r.hours_logged || 0), 0);
+  res.json({ events: regs, totalRegistered: regs.length, totalAttended: regs.filter(r => r.status === 'attended').length, totalHours });
 });
 
-// DELETE /api/events/:id/register - Unregister from event (Volunteer)
-app.delete('/api/events/:id/register', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}/register/${req.user.id}`, { method: 'DELETE' });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Unregister event error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
+// ==================== BRANCHES ====================
+
+app.get('/api/branches', authenticateToken, (req, res) => {
+  const branches = db.prepare('SELECT * FROM branches').all();
+  const enriched = branches.map(b => ({ ...b, volunteerCount: db.prepare('SELECT COUNT(*) as c FROM volunteers WHERE city=?').get(b.city).c }));
+  res.json(enriched);
+});
+app.get('/api/branches/:id', authenticateToken, (req, res) => { const b = db.prepare('SELECT * FROM branches WHERE id=?').get(req.params.id); b ? res.json(b) : res.status(404).json({ error: { message: 'Not found' } }); });
+app.post('/api/branches', authenticateToken, requireAdmin, (req, res) => { const { name, city, state, contactEmail, contactPhone } = req.body; const r = db.prepare('INSERT INTO branches (name,city,state,contact_email,contact_phone) VALUES (?,?,?,?,?)').run(name, city, state, contactEmail, contactPhone); res.status(201).json(db.prepare('SELECT * FROM branches WHERE id=?').get(r.lastInsertRowid)); });
+app.put('/api/branches/:id', authenticateToken, requireAdmin, (req, res) => { const { name, city, state, contactEmail, contactPhone, status } = req.body; db.prepare('UPDATE branches SET name=COALESCE(?,name),city=COALESCE(?,city),state=COALESCE(?,state),contact_email=COALESCE(?,contact_email),contact_phone=COALESCE(?,contact_phone),status=COALESCE(?,status) WHERE id=?').run(name, city, state, contactEmail, contactPhone, status, req.params.id); res.json(db.prepare('SELECT * FROM branches WHERE id=?').get(req.params.id)); });
+app.delete('/api/branches/:id', authenticateToken, requireAdmin, (req, res) => { db.prepare('DELETE FROM branches WHERE id=?').run(req.params.id); res.json({ message: 'Deleted' }); });
+
+// ==================== STUDENTS ====================
+
+app.get('/api/students', authenticateToken, requireAdmin, (req, res) => { const { city, branchId, volunteerId, status } = req.query; let q = 'SELECT * FROM students WHERE 1=1'; const p = []; if (city) { q += ' AND city=?'; p.push(city); } if (branchId) { q += ' AND branch_id=?'; p.push(branchId); } if (volunteerId) { q += ' AND assigned_volunteer_id=?'; p.push(volunteerId); } if (status) { q += ' AND status=?'; p.push(status); } res.json(db.prepare(q).all(...p)); });
+app.get('/api/students/summary', authenticateToken, requireAdmin, (req, res) => { res.json({ totalStudents: db.prepare('SELECT COUNT(*) as c FROM students').get().c, activeStudents: db.prepare("SELECT COUNT(*) as c FROM students WHERE status='active'").get().c, totalSessions: db.prepare('SELECT COUNT(*) as c FROM teaching_sessions').get().c, totalTeachingMinutes: db.prepare('SELECT COALESCE(SUM(duration_minutes),0) as c FROM teaching_sessions').get().c }); });
+app.get('/api/students/:id', authenticateToken, (req, res) => { const s = db.prepare('SELECT * FROM students WHERE id=?').get(req.params.id); if (!s) return res.status(404).json({ error: { message: 'Not found' } }); const sessions = db.prepare('SELECT * FROM teaching_sessions WHERE student_id=? ORDER BY session_date DESC').all(req.params.id); res.json({ student: s, sessions }); });
+app.post('/api/students', authenticateToken, requireAdmin, (req, res) => { const { name, age, school, grade, guardianName, guardianPhone, city, branchId, assignedVolunteerId } = req.body; const r = db.prepare('INSERT INTO students (name,age,school,grade,guardian_name,guardian_phone,city,branch_id,assigned_volunteer_id) VALUES (?,?,?,?,?,?,?,?,?)').run(name, age, school, grade, guardianName, guardianPhone, city, branchId, assignedVolunteerId); res.status(201).json(db.prepare('SELECT * FROM students WHERE id=?').get(r.lastInsertRowid)); });
+app.put('/api/students/:id', authenticateToken, requireAdmin, (req, res) => { const { name, age, school, grade, guardianName, guardianPhone, city, branchId, assignedVolunteerId, status, notes } = req.body; db.prepare('UPDATE students SET name=COALESCE(?,name),age=COALESCE(?,age),school=COALESCE(?,school),grade=COALESCE(?,grade),guardian_name=COALESCE(?,guardian_name),guardian_phone=COALESCE(?,guardian_phone),city=COALESCE(?,city),branch_id=COALESCE(?,branch_id),assigned_volunteer_id=COALESCE(?,assigned_volunteer_id),status=COALESCE(?,status),notes=COALESCE(?,notes) WHERE id=?').run(name, age, school, grade, guardianName, guardianPhone, city, branchId, assignedVolunteerId, status, notes, req.params.id); res.json(db.prepare('SELECT * FROM students WHERE id=?').get(req.params.id)); });
+app.delete('/api/students/:id', authenticateToken, requireAdmin, (req, res) => { db.prepare('DELETE FROM students WHERE id=?').run(req.params.id); res.json({ message: 'Deleted' }); });
+
+app.post('/api/students/sessions', authenticateToken, (req, res) => { const { studentId, subject, sessionDate, durationMinutes, notes } = req.body; if (!studentId || !subject) return res.status(400).json({ error: { message: 'studentId and subject required' } }); const r = db.prepare('INSERT INTO teaching_sessions (volunteer_id,student_id,subject,session_date,duration_minutes,notes) VALUES (?,?,?,?,?,?)').run(req.user.id, studentId, subject, sessionDate || new Date().toISOString(), durationMinutes || 60, notes); res.status(201).json(db.prepare('SELECT * FROM teaching_sessions WHERE id=?').get(r.lastInsertRowid)); });
+app.get('/api/my-sessions', authenticateToken, (req, res) => { const sessions = db.prepare('SELECT ts.*, s.name as student_name FROM teaching_sessions ts JOIN students s ON ts.student_id=s.id WHERE ts.volunteer_id=? ORDER BY ts.session_date DESC').all(req.user.id); const totalMin = sessions.reduce((sum, s) => sum + s.duration_minutes, 0); res.json({ sessions, totalSessions: sessions.length, totalMinutes: totalMin, totalHours: Math.round(totalMin / 6) / 10 }); });
+
+// ==================== DONATIONS ====================
+
+app.get('/api/donations', authenticateToken, requireAdmin, (req, res) => { res.json(db.prepare('SELECT * FROM donations ORDER BY donation_date DESC').all()); });
+app.get('/api/donations/summary', authenticateToken, requireAdmin, (req, res) => {
+  const all = db.prepare("SELECT * FROM donations WHERE status='completed'").all();
+  const totalAmount = all.reduce((s, d) => s + d.amount, 0);
+  const thisMonth = all.filter(d => new Date(d.donation_date) > new Date(Date.now() - 30 * 86400000)).reduce((s, d) => s + d.amount, 0);
+  const byCampaign = {};
+  all.forEach(d => { if (d.campaign) byCampaign[d.campaign] = (byCampaign[d.campaign] || 0) + d.amount; });
+  res.json({ totalAmount, totalDonations: all.length, thisMonthAmount: thisMonth, byCampaign: Object.entries(byCampaign).map(([campaign, amount]) => ({ campaign, amount })) });
+});
+app.get('/api/donations/:id', authenticateToken, requireAdmin, (req, res) => { const d = db.prepare('SELECT * FROM donations WHERE id=?').get(req.params.id); d ? res.json(d) : res.status(404).json({ error: { message: 'Not found' } }); });
+app.post('/api/donations', authenticateToken, requireAdmin, (req, res) => { const { donorName, donorEmail, donorPhone, amount, campaign, paymentMethod, panNumber, notes } = req.body; if (!donorName || !amount) return res.status(400).json({ error: { message: 'donorName and amount required' } }); const receipt = 'NP-' + Date.now().toString().slice(-5); const r = db.prepare('INSERT INTO donations (donor_name,donor_email,donor_phone,amount,campaign,payment_method,receipt_number,pan_number,notes) VALUES (?,?,?,?,?,?,?,?,?)').run(donorName, donorEmail, donorPhone, amount, campaign, paymentMethod, receipt, panNumber, notes); res.status(201).json(db.prepare('SELECT * FROM donations WHERE id=?').get(r.lastInsertRowid)); });
+app.put('/api/donations/:id', authenticateToken, requireAdmin, (req, res) => { const { donorName, donorEmail, donorPhone, amount, campaign, paymentMethod, panNumber, status, notes } = req.body; db.prepare('UPDATE donations SET donor_name=COALESCE(?,donor_name),donor_email=COALESCE(?,donor_email),donor_phone=COALESCE(?,donor_phone),amount=COALESCE(?,amount),campaign=COALESCE(?,campaign),payment_method=COALESCE(?,payment_method),pan_number=COALESCE(?,pan_number),status=COALESCE(?,status),notes=COALESCE(?,notes) WHERE id=?').run(donorName, donorEmail, donorPhone, amount, campaign, paymentMethod, panNumber, status, notes, req.params.id); res.json(db.prepare('SELECT * FROM donations WHERE id=?').get(req.params.id)); });
+app.delete('/api/donations/:id', authenticateToken, requireAdmin, (req, res) => { db.prepare('DELETE FROM donations WHERE id=?').run(req.params.id); res.json({ message: 'Deleted' }); });
+
+// ==================== AUDIT ====================
+
+app.get('/api/audit', authenticateToken, requireAdmin, (req, res) => { res.json(db.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 50').all()); });
+app.post('/api/audit', authenticateToken, requireAdmin, (req, res) => { const { action, targetEntity, targetId, details } = req.body; const r = db.prepare('INSERT INTO audit_logs (admin_id,action,target_entity,target_id,details) VALUES (?,?,?,?,?)').run(req.user.id, action, targetEntity, targetId, details); res.status(201).json(db.prepare('SELECT * FROM audit_logs WHERE id=?').get(r.lastInsertRowid)); });
+
+// ==================== CHATBOT ====================
+
+function computeScore(userQ, faqQ) {
+  const normalize = (t) => t.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+  const a = new Set(normalize(userQ)), b = new Set(normalize(faqQ));
+  if (!a.size || !b.size) return 0;
+  const inter = [...a].filter(x => b.has(x)).length;
+  return (2.0 * inter) / (a.size + b.size) * 0.6 + (inter / Math.min(a.size, b.size)) * 0.4;
+}
+
+app.get('/api/faqs', (req, res) => { res.json(db.prepare('SELECT * FROM faqs').all()); });
+app.post('/api/faqs', authenticateToken, requireAdmin, (req, res) => { const { question, answer, category } = req.body; const r = db.prepare('INSERT INTO faqs (question,answer,category) VALUES (?,?,?)').run(question, answer, category); res.status(201).json(db.prepare('SELECT * FROM faqs WHERE id=?').get(r.lastInsertRowid)); });
+app.put('/api/faqs/:id', authenticateToken, requireAdmin, (req, res) => { const { question, answer, category } = req.body; db.prepare('UPDATE faqs SET question=COALESCE(?,question),answer=COALESCE(?,answer),category=COALESCE(?,category) WHERE id=?').run(question, answer, category, req.params.id); res.json(db.prepare('SELECT * FROM faqs WHERE id=?').get(req.params.id)); });
+app.delete('/api/faqs/:id', authenticateToken, requireAdmin, (req, res) => { db.prepare('DELETE FROM faqs WHERE id=?').run(req.params.id); res.json({ message: 'Deleted' }); });
+
+app.post('/api/chatbot/ask', chatbotLimiter, (req, res) => {
+  const { question } = req.body;
+  if (!question || !question.trim()) return res.status(400).json({ error: { message: 'Question required' } });
+  const faqs = db.prepare('SELECT * FROM faqs').all();
+  let bestScore = 0, bestFaq = null;
+  for (const faq of faqs) { const score = computeScore(question, faq.question); if (score > bestScore) { bestScore = score; bestFaq = faq; } }
+
+  let answer, source, matchedFaqId = null;
+  if (bestScore >= 0.4 && bestFaq) { answer = bestFaq.answer; source = 'faq'; matchedFaqId = bestFaq.id; }
+  else { answer = "Thank you for asking! I couldn't find a specific FAQ match. Please contact us at contact@nayepankh.org or +91 8318500748 for detailed help."; source = 'ai'; }
+
+  // Log
+  const volId = (() => { try { const t = req.headers['authorization']?.split(' ')[1]; if (t) return jwt.verify(t, JWT_SECRET).id; } catch {} return null; })();
+  db.prepare('INSERT INTO chat_logs (volunteer_id,question,matched_faq_id,response_source) VALUES (?,?,?,?)').run(volId, question, matchedFaqId, source);
+  res.json({ answer, source, matchedFaqId });
 });
 
-// PUT /api/events/:id/attendance - Mark attendance (Admin only)
-app.put('/api/events/:id/attendance', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/${req.params.id}/attendance`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Mark attendance error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
+// ==================== START ====================
 
-// GET /api/events/my-events - Get volunteer's registered events
-app.get('/api/my-events', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/events/volunteer/${req.user.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get my events error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
+seed(); // Seed data on first run
 
-// --- ANALYTICS ROUTES (ADMIN ONLY) ---
-
-// GET /api/analytics/summary
-app.get('/api/analytics/summary', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/analytics/summary`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Analytics summary error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/analytics/trends
-app.get('/api/analytics/trends', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/analytics/trends`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Analytics trends error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// --- CHATBOT ROUTES (PUBLIC / ADMIN) ---
-
-// --- AUDIT LOG ROUTES (ADMIN ONLY) ---
-
-// --- STUDENT ROUTES ---
-
-// --- DONATION ROUTES (ADMIN ONLY) ---
-
-// GET /api/donations - Get all donations
-app.get('/api/donations', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get donations error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/donations/summary - Donation analytics
-app.get('/api/donations/summary', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations/summary`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Donation summary error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/donations/:id - Get donation detail
-app.get('/api/donations/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations/${req.params.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get donation error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// POST /api/donations - Record donation (Admin)
-app.post('/api/donations', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Create donation error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// PUT /api/donations/:id - Update donation (Admin)
-app.put('/api/donations/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations/${req.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Update donation error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// DELETE /api/donations/:id - Delete donation (Admin)
-app.delete('/api/donations/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/donations/${req.params.id}`, { method: 'DELETE' });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Delete donation error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// --- STUDENT ROUTES ---
-
-// GET /api/students - Get all students (Admin)
-app.get('/api/students', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const query = new URLSearchParams(req.query).toString();
-    const response = await fetch(`${JAVA_SERVICE_URL}/students?${query}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get students error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/students/summary - Student stats
-app.get('/api/students/summary', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/summary`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Student summary error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/students/:id - Get student detail
-app.get('/api/students/:id', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/${req.params.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get student error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// POST /api/students - Create student (Admin)
-app.post('/api/students', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Create student error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// PUT /api/students/:id - Update student (Admin)
-app.put('/api/students/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/${req.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Update student error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// DELETE /api/students/:id - Delete student (Admin)
-app.delete('/api/students/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/${req.params.id}`, { method: 'DELETE' });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Delete student error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// POST /api/students/sessions - Log teaching session
-app.post('/api/students/sessions', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...req.body, volunteerId: req.body.volunteerId || req.user.id })
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Log session error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// GET /api/students/sessions/mine - Get my teaching sessions
-app.get('/api/my-sessions', authenticateToken, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/students/sessions/volunteer/${req.user.id}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get my sessions error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } });
-  }
-});
-
-// --- AUDIT LOG ROUTES (ADMIN ONLY) ---
-
-// POST /api/audit - Log an admin action
-app.post('/api/audit', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/audit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...req.body, adminId: req.user.id })
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Audit log error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to log action' } });
-  }
-});
-
-// GET /api/audit - Get recent audit logs
-app.get('/api/audit', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${JAVA_SERVICE_URL}/audit`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get audit logs error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch audit logs' } });
-  }
-});
-
-// --- CHATBOT ROUTES (PUBLIC / ADMIN) ---
-
-// POST /api/chatbot/ask - Public (rate limited)
-app.post('/api/chatbot/ask', chatbotLimiter, async (req, res) => {
-  try {
-    // If the request contains a token, decode it and pass the volunteerId
-    let volunteerId = null;
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        volunteerId = decoded.id;
-      } catch (e) {
-        // Continue anonymous
-      }
-    }
-
-    const response = await fetch(`${PYTHON_SERVICE_URL}/chatbot/ask`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question: req.body.question,
-        volunteerId: volunteerId
-      })
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Chatbot ask error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to contact chatbot service' } });
-  }
-});
-
-// GET /api/faqs - Public
-app.get('/api/faqs', async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/faqs`);
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Get FAQs error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to retrieve FAQs' } });
-  }
-});
-
-// POST /api/faqs - Admin Only
-app.post('/api/faqs', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/faqs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Create FAQ error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create FAQ' } });
-  }
-});
-
-// PUT /api/faqs/:id - Admin Only
-app.put('/api/faqs/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/faqs/${req.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Update FAQ error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update FAQ' } });
-  }
-});
-
-// DELETE /api/faqs/:id - Admin Only
-app.delete('/api/faqs/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/faqs/${req.params.id}`, {
-      method: 'DELETE'
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('Delete FAQ error:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete FAQ' } });
-  }
-});
-
-// Start Gateway Server
 app.listen(PORT, () => {
-  console.log(`API Gateway running on port ${PORT}`);
-  console.log(`Proxying Core CRUD/Analytics to Java Service: ${JAVA_SERVICE_URL}`);
-  console.log(`Proxying Chatbot/FAQs to Python Service: ${PYTHON_SERVICE_URL}`);
+  console.log(`🚀 NayePankh API running on port ${PORT}`);
+  console.log(`📊 Health: http://localhost:${PORT}/health`);
 });
